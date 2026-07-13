@@ -19,7 +19,7 @@ pub enum AuthMethod {
 pub struct ConnectSftpParams<'a> {
   pub username: &'a str,
   pub host: &'a str,
-  pub port: usize,
+  pub port: u16,
   pub auth: AuthMethod,
 }
 

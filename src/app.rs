@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::ArgMatches;
 use ratatui::{
   prelude::{Buffer, Rect},
@@ -18,22 +18,48 @@ pub struct App {
   sftp: Sftp,
 }
 
-fn parse_user_and_host(raw: &str) -> (Option<String>, String) {
-  if let Some((username, host)) = raw.split_once('@') {
-    (Some(username.into()), host.into())
-  } else {
-    (None, raw.into())
+pub struct HostAddress {
+  pub username: Option<String>,
+  pub host: String,
+  pub port: Option<u16>,
+}
+
+fn parse_host_address(input: &str) -> Result<HostAddress> {
+  let (username, host_part) = match input.split_once('@') {
+    Some((user, rest)) if !user.is_empty() => (Some(user.to_string()), rest),
+    _ => (None, input),
+  };
+
+  let (host, port) = match host_part.rsplit_once(':') {
+    Some((h, p)) if !p.is_empty() => {
+      let port_num = p
+        .parse::<u16>()
+        .with_context(|| format!("failed to parse port {p} as u16"))?;
+      (h.to_string(), Some(port_num))
+    }
+    _ => (host_part.to_string(), None),
+  };
+
+  if host.is_empty() {
+    bail!("invalid format: empty host");
   }
+
+  Ok(HostAddress {
+    username,
+    host,
+    port,
+  })
 }
 
 impl App {
   pub fn new(matches: ArgMatches) -> Result<Self> {
-    let (user, host) = parse_user_and_host(
+    let host_addr = parse_host_address(
       matches
         .get_one::<String>("host")
         .expect("host is required argument"),
-    );
-    let username = user.unwrap_or_else(|| {
+    )
+    .context("failed to parse host address")?;
+    let username = host_addr.username.unwrap_or_else(|| {
       whoami::username().expect("failed to get username as fallback when none provided")
     });
     let passphrase = matches.get_one::<String>("passphrase").cloned();
@@ -54,11 +80,16 @@ impl App {
       remote_path: PathBuf::new(),
       sftp: sftp::connect_sftp(sftp::ConnectSftpParams {
         username: &username,
-        host: &host,
-        port: 22, // TODO
+        host: &host_addr.host,
+        port: host_addr.port.unwrap_or(22),
         auth,
       })
-      .with_context(|| format!("failed to connect to host {host} with username {username}"))?,
+      .with_context(|| {
+        format!(
+          "failed to connect to host {} with username {}",
+          host_addr.host, username
+        )
+      })?,
     })
   }
 }
