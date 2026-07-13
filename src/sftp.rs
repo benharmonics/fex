@@ -31,9 +31,8 @@ pub fn connect_sftp(ps: ConnectSftpParams) -> Result<Sftp> {
   sess.set_tcp_stream(tcpstream);
   sess.handshake().context("failed SSH handshake")?;
 
-  verify_host_key(&sess, ps.host).context("host validation failed")?; // TODO
+  verify_host_key(&sess, ps.host).context("host validation failed")?;
   authenticate(&sess, ps.username, ps.auth).context("authentication failed")?;
-  println!("DEBUG: authenticated successfully");
 
   let sftp = sess.sftp().context("failed to generate SFTP context")?;
 

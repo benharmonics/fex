@@ -2,20 +2,31 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use clap::ArgMatches;
-use ratatui::{
-  prelude::{Buffer, Rect},
-  style::Style,
-  widgets::Widget,
-};
+use ratatui::widgets::ListState;
 use ssh2::Sftp;
 
 use crate::sftp::{self, AuthMethod};
 
+pub enum Focus {
+  Local,
+  Remote,
+}
+
 pub struct App {
   pub should_quit: bool,
-  local_path: PathBuf,
-  remote_path: PathBuf,
-  sftp: Sftp,
+
+  pub focus: Focus,
+
+  pub local_state: ListState,
+  pub remote_state: ListState,
+
+  pub local_path: PathBuf,
+  pub remote_path: PathBuf,
+
+  pub local_items: Vec<PathBuf>,
+  pub remote_items: Vec<PathBuf>,
+
+  pub sftp: Sftp,
 }
 
 pub struct HostAddress {
@@ -76,8 +87,13 @@ impl App {
 
     Ok(Self {
       should_quit: false,
+      focus: Focus::Local,
+      local_state: ListState::default(),
+      remote_state: ListState::default(),
       local_path: PathBuf::new(),
       remote_path: PathBuf::new(),
+      local_items: Vec::new(),
+      remote_items: Vec::new(),
       sftp: sftp::connect_sftp(sftp::ConnectSftpParams {
         username: &username,
         host: &host_addr.host,
@@ -92,11 +108,11 @@ impl App {
       })?,
     })
   }
-}
 
-impl Widget for &App {
-  fn render(self, area: Rect, buf: &mut Buffer) {
-    // Render stuff
-    buf.set_string(area.x, area.y, "Hello world", Style::new());
+  pub fn switch_focus(&mut self) {
+    self.focus = match self.focus {
+      Focus::Local => Focus::Remote,
+      Focus::Remote => Focus::Local,
+    }
   }
 }
