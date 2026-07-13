@@ -6,20 +6,20 @@ pub fn get_matches() -> ArgMatches {
   Command::new("fex")
     .arg(
       arg!(
-        -i --identity "Selects the file from which the identity (private key) for public key authentication is read.  This option is directly passed to ssh(1)."
+        -i --identity <IDENTITY> "Selects the file from which the identity (private key) for public key authentication is read.  This option is directly passed to ssh(1)."
       )
       .required(false)
       .value_parser(value_parser!(PathBuf))
     )
     .arg(
       arg!(
-        -p --passphrase "Optional passphrase used with an identity file."
+        -p --passphrase <PASSPHRASE> "Optional passphrase used with an identity file."
       )
       .required(false)
       .value_parser(value_parser!(String))
     )
     .arg(
-      arg!(<HOST> "The remote host in format [username@]host").id("host").value_parser(value_parser!(String))
+      arg!(<HOST> "The remote host in format [username@]host[:port]").id("host").value_parser(value_parser!(String))
     )
     .get_matches()
 }

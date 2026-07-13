@@ -7,54 +7,39 @@ use std::{
 
 pub enum AuthMethod {
   PrivateKey {
-    username: String,
     key_path: PathBuf,
     passphrase: Option<String>,
   },
   PasswordCli {
-    username: String,
     password: String,
   },
-  PasswordInput {
-    username: String,
-  },
+  PasswordInput,
 }
 
-impl AuthMethod {
-  pub fn username<'a>(&'a self) -> &'a str {
-    match self {
-      Self::PrivateKey {
-        username,
-        key_path: _,
-        passphrase: _,
-      } => username,
-      Self::PasswordCli {
-        username,
-        password: _,
-      } => username,
-      Self::PasswordInput { username } => username,
-    }
-  }
+pub struct ConnectSftpParams<'a> {
+  pub username: &'a str,
+  pub host: &'a str,
+  pub port: usize,
+  pub auth: AuthMethod,
 }
 
-pub fn connect_sftp(host: &str, auth: AuthMethod) -> Result<Sftp> {
-  let tcpstream = TcpStream::connect(host).context("failed to connect to remote host")?;
+pub fn connect_sftp(ps: ConnectSftpParams) -> Result<Sftp> {
+  let addr = format!("{}:{}", ps.host, ps.port);
+  let tcpstream = TcpStream::connect(addr).context("failed to construct TCP stream")?;
 
-  let mut sess = Session::new().context("failed to construct SSH session with remote host")?;
+  let mut sess = Session::new().context("failed to create session")?;
   sess.set_tcp_stream(tcpstream);
-  sess
-    .handshake()
-    .context("failed session handshake with remote host")?;
+  sess.handshake().context("failed SSH handshake")?;
 
-  verify_host_key(&sess, host)?;
-  authenticate(&sess, auth)?;
+  // verify_host_key(&sess, ps.host).context("host validation failed")?; // TODO
+  authenticate(&sess, ps.username, ps.auth).context("authentication failed")?;
 
-  let sftp = sess.sftp().context("failed to initialize SFTP subsystem")?;
+  let sftp = sess.sftp().context("failed to generate SFTP context")?;
 
   return Ok(sftp);
 }
 
-pub fn verify_host_key(sess: &Session, host: &str) -> Result<()> {
+fn verify_host_key(sess: &Session, host: &str) -> Result<()> {
   let mut known_hosts = sess
     .known_hosts()
     .context("failed to get session's known hosts")?;
@@ -88,27 +73,31 @@ pub fn verify_host_key(sess: &Session, host: &str) -> Result<()> {
   Ok(())
 }
 
-fn authenticate(sess: &Session, auth: AuthMethod) -> Result<()> {
-  if try_agent(auth.username(), sess).context("failed to try SSH agent")? {
+fn authenticate(sess: &Session, username: &str, auth: AuthMethod) -> Result<()> {
+  if try_agent(username, sess).context("failed to try SSH agent")? {
     return Ok(());
   }
 
   match auth {
     AuthMethod::PrivateKey {
-      username,
       key_path,
       passphrase,
     } => {
+      println!(
+        "DEBUG: key_path={}, passphrase={}",
+        key_path.to_str().unwrap_or("<no key path>"),
+        passphrase.clone().unwrap_or("<no passphrase>".to_string())
+      );
       sess
-        .userauth_pubkey_file(&username, None, Path::new(&key_path), passphrase.as_deref())
+        .userauth_pubkey_file(username, None, Path::new(&key_path), passphrase.as_deref())
         .context("failed to set pubkey auth")?;
     }
-    AuthMethod::PasswordCli { username, password } => {
+    AuthMethod::PasswordCli { password } => {
       sess
-        .userauth_password(&username, &password)
+        .userauth_password(username, &password)
         .context("failed password authentication")?;
     }
-    AuthMethod::PasswordInput { username } => {
+    AuthMethod::PasswordInput => {
       unimplemented!();
       // sess
       //   .userauth_password(&username, &password)
