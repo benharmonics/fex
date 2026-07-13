@@ -1,8 +1,15 @@
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use clap::ArgMatches;
-use ratatui::widgets::ListState;
+use ratatui::{
+  Frame,
+  crossterm::event::{self, Event, KeyCode, KeyEventKind},
+  layout::{Constraint, Direction, Layout},
+  style::{Color, Modifier, Style},
+  widgets::{Block, Borders, List, ListItem, ListState},
+};
 use ssh2::Sftp;
 
 use crate::sftp::{self, AuthMethod};
@@ -29,7 +36,7 @@ pub struct App {
   pub sftp: Sftp,
 }
 
-pub struct HostAddress {
+struct HostAddress {
   pub username: Option<String>,
   pub host: String,
   pub port: Option<u16>,
@@ -109,7 +116,70 @@ impl App {
     })
   }
 
-  pub fn switch_focus(&mut self) {
+  pub fn update(&mut self) -> Result<()> {
+    if event::poll(Duration::from_millis(100))? {
+      if let Event::Key(key) = event::read()? {
+        if key.kind == KeyEventKind::Press {
+          match key.code {
+            KeyCode::Char('q') => self.should_quit = true,
+            KeyCode::Char('j') | KeyCode::Down => {}
+            KeyCode::Char('k') | KeyCode::Up => {}
+            KeyCode::Tab => self.switch_focus(),
+            _ => {}
+          }
+        }
+      }
+    }
+
+    Ok(())
+  }
+
+  pub fn render(&mut self, f: &mut Frame) {
+    let chunks = Layout::default()
+      .direction(Direction::Horizontal)
+      .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+      .split(f.area());
+
+    // Local items
+    let left_items: Vec<ListItem> = self
+      .local_items
+      .iter()
+      .map(|buf| ListItem::new(buf.to_string_lossy()))
+      .collect();
+    let left_block = Block::default()
+      .title("Local")
+      .borders(Borders::ALL)
+      .border_style(match self.focus {
+        Focus::Local => Style::default().fg(Color::Magenta),
+        Focus::Remote => Style::default(),
+      });
+    let left_list = List::new(left_items)
+      .block(left_block)
+      .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+      .highlight_symbol("> ");
+    f.render_stateful_widget(left_list, chunks[0], &mut self.local_state);
+
+    // Remote items
+    let right_items: Vec<ListItem> = self
+      .remote_items
+      .iter()
+      .map(|buf| ListItem::new(buf.to_string_lossy()))
+      .collect();
+    let right_block = Block::default()
+      .title("Remote")
+      .borders(Borders::ALL)
+      .border_style(match self.focus {
+        Focus::Local => Style::default(),
+        Focus::Remote => Style::default().fg(Color::Magenta),
+      });
+    let right_list = List::new(right_items)
+      .block(right_block)
+      .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+      .highlight_symbol("> ");
+    f.render_stateful_widget(right_list, chunks[1], &mut self.remote_state);
+  }
+
+  fn switch_focus(&mut self) {
     self.focus = match self.focus {
       Focus::Local => Focus::Remote,
       Focus::Remote => Focus::Local,
