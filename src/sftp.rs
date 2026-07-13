@@ -25,14 +25,15 @@ pub struct ConnectSftpParams<'a> {
 
 pub fn connect_sftp(ps: ConnectSftpParams) -> Result<Sftp> {
   let addr = format!("{}:{}", ps.host, ps.port);
-  let tcpstream = TcpStream::connect(addr).context("failed to construct TCP stream")?;
+  let tcpstream = TcpStream::connect(&addr).context("failed to construct TCP stream")?;
 
   let mut sess = Session::new().context("failed to create session")?;
   sess.set_tcp_stream(tcpstream);
   sess.handshake().context("failed SSH handshake")?;
 
-  // verify_host_key(&sess, ps.host).context("host validation failed")?; // TODO
+  verify_host_key(&sess, ps.host).context("host validation failed")?; // TODO
   authenticate(&sess, ps.username, ps.auth).context("authentication failed")?;
+  println!("DEBUG: authenticated successfully");
 
   let sftp = sess.sftp().context("failed to generate SFTP context")?;
 
@@ -83,11 +84,6 @@ fn authenticate(sess: &Session, username: &str, auth: AuthMethod) -> Result<()> 
       key_path,
       passphrase,
     } => {
-      println!(
-        "DEBUG: key_path={}, passphrase={}",
-        key_path.to_str().unwrap_or("<no key path>"),
-        passphrase.clone().unwrap_or("<no passphrase>".to_string())
-      );
       sess
         .userauth_pubkey_file(username, None, Path::new(&key_path), passphrase.as_deref())
         .context("failed to set pubkey auth")?;
