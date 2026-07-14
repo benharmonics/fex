@@ -1,0 +1,35 @@
+# fex
+
+SFTP with an interactive text-based user interface (TUI).
+
+Transfer files through an encrypted connection with a visual interface, so you can see both connections at once.
+
+Use VIM keys or arrow keys for navigation!
+
+<!-- ![usage](images/tty.gif) -->
+
+## Controls
+
+- `l` or `➡` (right arrow key): enter highlighted directory (move further down the directory tree)
+- `h` or `⬅` (left arrow key): exit current directory (move further up the directory tree)
+- `j` or `⬇` (down arrow key): move down
+- `k` or `⬆` (up arrow key): move up
+- `y` or `↩` (enter): download/upload highlighted item
+- `w` or `↹` (tab): Switch windows
+- `G` or `b` or `Ctrl`+`⬇`: navigate to bottom-most entry
+- `g` or `t` or `Ctrl`+`⬆`: navigate to top-most entry
+- `a`: toggle hidden files
+- `q` or `Esc`: quit
+- `?`: toggle help menu
+
+## Installation
+
+### Cargo
+
+Clone the repository (i.e. `git clone https://gitlab.com/benharmonics/fex.git`), then
+
+```bash
+cargo install --path path/to/fex
+```
+
+Cargo will automatically install programs to `$HOME/.cargo` by default.

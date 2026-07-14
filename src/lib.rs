@@ -1,7 +1,9 @@
 mod app;
 mod args;
+mod event;
 mod files;
 mod sftp;
+mod transfer;
 
 use std::io;
 
@@ -15,24 +17,40 @@ use ratatui::{
   prelude::CrosstermBackend,
 };
 
+struct TerminalGuard {
+  terminal: DefaultTerminal,
+}
+
+impl TerminalGuard {
+  fn new() -> Result<Self> {
+    // raw mode allows the application to track individual key strokes, i.e. without hitting enter.
+    enable_raw_mode().context("failed to enable raw mode")?;
+
+    let backend = CrosstermBackend::new(io::stdout());
+    let mut terminal = DefaultTerminal::new(backend).context("failed to start terminal")?;
+    terminal.backend_mut().execute(EnterAlternateScreen)?;
+    Ok(Self { terminal })
+  }
+}
+
+impl Drop for TerminalGuard {
+  fn drop(&mut self) {
+    // best-effort cleanup - ignore errors
+    let _ = disable_raw_mode();
+    let _ = self.terminal.backend_mut().execute(LeaveAlternateScreen);
+    let _ = self.terminal.show_cursor();
+  }
+}
+
 pub fn run() -> Result<()> {
   let mut app = app::App::new(args::get_matches()).context("failed to start app")?;
 
-  // raw mode allows the application to track individual key strokes, i.e. without hitting enter.
-  enable_raw_mode().context("failed to enable raw mode")?;
-
-  let backend = CrosstermBackend::new(io::stdout());
-  let mut terminal = DefaultTerminal::new(backend).context("failed to start terminal")?;
-  terminal.backend_mut().execute(EnterAlternateScreen)?;
+  let mut tg = TerminalGuard::new()?;
 
   while !app.should_quit {
-    terminal.draw(|f| app.render(f))?;
+    tg.terminal.draw(|f| app.render(f))?;
     app.update()?;
   }
-
-  disable_raw_mode().context("failed to disable raw mode")?;
-  terminal.backend_mut().execute(LeaveAlternateScreen)?;
-  terminal.show_cursor()?;
 
   Ok(())
 }

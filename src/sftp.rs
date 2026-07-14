@@ -5,6 +5,7 @@ use std::{
   path::{Path, PathBuf},
 };
 
+#[derive(Clone)]
 pub enum AuthMethod {
   PrivateKey {
     key_path: PathBuf,
@@ -23,7 +24,7 @@ pub struct ConnectSftpParams<'a> {
   pub auth: AuthMethod,
 }
 
-pub fn connect_sftp(ps: ConnectSftpParams) -> Result<Sftp> {
+pub fn connect_sftp(ps: &ConnectSftpParams) -> Result<Sftp> {
   let addr = format!("{}:{}", ps.host, ps.port);
   let tcpstream = TcpStream::connect(&addr).context("failed to construct TCP stream")?;
 
@@ -32,11 +33,11 @@ pub fn connect_sftp(ps: ConnectSftpParams) -> Result<Sftp> {
   sess.handshake().context("failed SSH handshake")?;
 
   verify_host_key(&sess, ps.host).context("host validation failed")?;
-  authenticate(&sess, ps.username, ps.auth).context("authentication failed")?;
+  authenticate(&sess, ps.username, ps.auth.clone()).context("authentication failed")?;
 
   let sftp = sess.sftp().context("failed to generate SFTP context")?;
 
-  return Ok(sftp);
+  Ok(sftp)
 }
 
 fn verify_host_key(sess: &Session, host: &str) -> Result<()> {
@@ -108,12 +109,13 @@ fn authenticate(sess: &Session, username: &str, auth: AuthMethod) -> Result<()> 
 }
 
 fn try_agent(username: &str, sess: &Session) -> Result<bool> {
-  if let Ok(mut agent) = sess.agent() {
-    if agent.connect().is_ok() && agent.list_identities().is_ok() {
-      for identity in agent.identities()? {
-        if agent.userauth(username, &identity).is_ok() {
-          return Ok(true);
-        }
+  if let Ok(mut agent) = sess.agent()
+    && agent.connect().is_ok()
+    && agent.list_identities().is_ok()
+  {
+    for identity in agent.identities()? {
+      if agent.userauth(username, &identity).is_ok() {
+        return Ok(true);
       }
     }
   }

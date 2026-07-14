@@ -1,62 +1,73 @@
 use std::{
-  ffi::OsStr,
   fs::{self, DirEntry, File},
   io,
-  path::PathBuf,
+  path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result};
-use ssh2:: Sftp;
+use ssh2::{FileStat, Sftp};
 
+/// List all remote files on a given path.
 pub fn local_files(dir: &PathBuf) -> Result<Vec<DirEntry>> {
   let contents = fs::read_dir(dir)
     .with_context(|| format!("failed to read directory {}", dir.to_string_lossy()))?;
-  Ok(contents.filter_map(|r| r.ok()).collect())
+  let mut files: Vec<DirEntry> = contents.filter_map(|r| r.ok()).collect();
+  files.sort_by(|a, b| {
+    a.file_name()
+      .to_string_lossy()
+      .cmp(&b.file_name().to_string_lossy())
+  });
+  Ok(files)
 }
 
-pub fn remote_files(dir: &PathBuf, sftp: &Sftp) -> Result<Vec<PathBuf>> {
-  Ok(
-    sftp
-      .readdir(dir)
-      .with_context(|| format!("failed to read remote directory {}", dir.to_string_lossy()))?
-      .into_iter()
-      .map(|(buf, _)| buf)
-      .collect(),
-  )
+/// List all remote files on a given path. Note that certain operations on PathBuf are not available
+/// on the remote host, and for these cases - like `buf.is_dir()` - FileStat is provided to
+/// substitute.
+pub fn remote_files(dir: &PathBuf, sftp: &Sftp) -> Result<Vec<(PathBuf, FileStat)>> {
+  let mut ret = sftp
+    .readdir(dir)
+    .with_context(|| format!("failed to read remote directory {}", dir.to_string_lossy()))?;
+  ret.sort_by(|(a, _), (b, _)| {
+    a.file_name()
+      .unwrap_or_default()
+      .to_string_lossy()
+      .cmp(&b.file_name().unwrap_or_default().to_string_lossy())
+  });
+
+  Ok(ret)
 }
 
-pub fn download_from_remote_host_recursive(
+/// Download a given file or directory from the remote host to the local host.
+pub fn download(
   path_buf: &PathBuf,
-  target_dir: &PathBuf,
+  stat: &FileStat,
+  target_dir: &Path,
   sftp: &Sftp,
-  follow_symlinks: bool,
 ) -> Result<()> {
-  for f in remote_files(path_buf, sftp)? {
-    // TODO
-    if follow_symlinks && f.is_symlink() {
-      continue;
-    }
-
-    if f.is_dir() {
-      let new_target = match f.file_name() {
-        Some(name) => target_dir.join(name),
-        None => unreachable!("no file name"),
-      };
-      download_from_remote_host_recursive(&f, &new_target, sftp, follow_symlinks)?;
-    }
-
-    download_file_from_remote_host(&f, target_dir, sftp)?;
+  if stat.is_file() {
+    download_file_from_remote_host(path_buf, target_dir, sftp)?;
   }
+
+  if stat.is_dir() {
+    let new_dir = &target_dir.join(path_buf.file_name().context("unnamed directory")?);
+    fs::create_dir_all(new_dir)
+      .with_context(|| format!("failed to make directory {:?}", new_dir))?;
+    for (f, stat) in &remote_files(path_buf, sftp)? {
+      download(f, stat, new_dir, sftp)?;
+    }
+  }
+
+  // TODO: symlinks?
 
   Ok(())
 }
 
 fn download_file_from_remote_host(
   path_buf: &PathBuf,
-  target_dir: &PathBuf,
+  target_dir: &Path,
   sftp: &Sftp,
 ) -> Result<()> {
-  let filename = path_buf.file_name().unwrap_or(&OsStr::new("unknown")); // TODO
+  let filename = path_buf.file_name().context("no file name")?; // TODO
   let mut dest = File::create(target_dir.join(filename))
     .with_context(|| format!("failed to create local file {}", filename.to_string_lossy()))?;
 
