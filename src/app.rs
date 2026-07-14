@@ -1,45 +1,27 @@
-use std::path::PathBuf;
-use std::time::Duration;
+use std::env;
+use std::fs::DirEntry;
+use std::path::Path;
+use std::{path::PathBuf, sync::mpsc::Receiver};
+use std::{sync::mpsc, thread};
 
 use anyhow::{Context, Result, bail};
 use clap::ArgMatches;
 use ratatui::{
   Frame,
-  crossterm::event::{self, Event, KeyCode, KeyEventKind},
+  crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind},
   layout::{Constraint, Direction, Layout},
   style::{Color, Modifier, Style},
   widgets::{Block, Borders, List, ListItem, ListState},
 };
 use ssh2::Sftp;
 
-use crate::sftp::{self, AuthMethod};
-
-pub enum Focus {
-  Local,
-  Remote,
-}
-
-pub struct App {
-  pub should_quit: bool,
-
-  pub focus: Focus,
-
-  pub local_state: ListState,
-  pub remote_state: ListState,
-
-  pub local_path: PathBuf,
-  pub remote_path: PathBuf,
-
-  pub local_items: Vec<PathBuf>,
-  pub remote_items: Vec<PathBuf>,
-
-  pub sftp: Sftp,
-}
+use crate::files;
+use crate::sftp::{AuthMethod, ConnectSftpParams, connect_sftp};
 
 struct HostAddress {
-  pub username: Option<String>,
-  pub host: String,
-  pub port: Option<u16>,
+  username: Option<String>,
+  host: String,
+  port: Option<u16>,
 }
 
 fn parse_host_address(input: &str) -> Result<HostAddress> {
@@ -69,6 +51,57 @@ fn parse_host_address(input: &str) -> Result<HostAddress> {
   })
 }
 
+pub enum Focus {
+  Local,
+  Remote,
+}
+
+pub struct App {
+  pub should_quit: bool,
+
+  events: Receiver<AppEvent>,
+  focus: Focus,
+
+  local_state: ListState,
+  remote_state: ListState,
+
+  local_path: PathBuf,
+  remote_path: PathBuf,
+
+  local_items: Vec<DirEntry>,
+  remote_items: Vec<PathBuf>,
+
+  sftp: Sftp,
+}
+
+pub enum AppEvent {
+  KeyPress(KeyEvent),
+  DownloadComplete,
+  Tick,
+}
+
+fn spawn_app_event_threads() -> Receiver<AppEvent> {
+  let (tx, rx) = mpsc::channel();
+
+  let tx_keypress = tx.clone();
+  thread::spawn(move || {
+    loop {
+      if let Event::Key(key) = event::read().expect("failed to read key events") {
+        if key.kind == KeyEventKind::Press {
+          tx_keypress
+            .send(AppEvent::KeyPress(key))
+            .expect("channel open");
+        }
+      }
+    }
+  });
+
+  // TODO: downloads
+  // TODO: ticks
+
+  return rx;
+}
+
 impl App {
   pub fn new(matches: ArgMatches) -> Result<Self> {
     let host_addr = parse_host_address(
@@ -92,43 +125,66 @@ impl App {
       None => AuthMethod::PasswordInput,
     };
 
+    let sftp = connect_sftp(ConnectSftpParams {
+      username: &username,
+      host: &host_addr.host,
+      port: host_addr.port.unwrap_or(22),
+      auth,
+    })
+    .with_context(|| {
+      format!(
+        "failed to connect to host {} with username {}",
+        host_addr.host, username
+      )
+    })?;
+
+    let local_path = env::current_dir().context("failed to get local directory")?;
+    let remote_path = sftp
+      .realpath(Path::new("."))
+      .context("failed to get remote directory")?;
+
+    let local_items = files::local_files(&local_path)?;
+    let remote_items = files::remote_files(&remote_path, &sftp)?;
+
+    let local_state = ListState::default().with_selected(if local_items.is_empty() {
+      None
+    } else {
+      Some(0)
+    });
+    let remote_state = ListState::default().with_selected(if remote_items.is_empty() {
+      None
+    } else {
+      Some(0)
+    });
+
     Ok(Self {
       should_quit: false,
+      events: spawn_app_event_threads(),
       focus: Focus::Local,
-      local_state: ListState::default(),
-      remote_state: ListState::default(),
-      local_path: PathBuf::new(),
-      remote_path: PathBuf::new(),
-      local_items: Vec::new(),
-      remote_items: Vec::new(),
-      sftp: sftp::connect_sftp(sftp::ConnectSftpParams {
-        username: &username,
-        host: &host_addr.host,
-        port: host_addr.port.unwrap_or(22),
-        auth,
-      })
-      .with_context(|| {
-        format!(
-          "failed to connect to host {} with username {}",
-          host_addr.host, username
-        )
-      })?,
+
+      local_state,
+      remote_state,
+      local_path,
+      remote_path,
+      local_items,
+      remote_items,
+
+      sftp,
     })
   }
 
   pub fn update(&mut self) -> Result<()> {
-    if event::poll(Duration::from_millis(100))? {
-      if let Event::Key(key) = event::read()? {
-        if key.kind == KeyEventKind::Press {
-          match key.code {
-            KeyCode::Char('q') => self.should_quit = true,
-            KeyCode::Char('j') | KeyCode::Down => {}
-            KeyCode::Char('k') | KeyCode::Up => {}
-            KeyCode::Tab => self.switch_focus(),
-            _ => {}
-          }
-        }
-      }
+    match self.events.recv()? {
+      AppEvent::KeyPress(key) => match key.code {
+        KeyCode::Char('q') => self.should_quit = true,
+        KeyCode::Char('j') | KeyCode::Down => {}
+        KeyCode::Char('k') | KeyCode::Up => {}
+        KeyCode::Tab => self.switch_focus(),
+        KeyCode::Enter => {}
+        _ => {}
+      },
+      AppEvent::DownloadComplete => todo!(),
+      AppEvent::Tick => todo!(),
     }
 
     Ok(())
@@ -144,7 +200,7 @@ impl App {
     let left_items: Vec<ListItem> = self
       .local_items
       .iter()
-      .map(|buf| ListItem::new(buf.to_string_lossy()))
+      .map(|e| ListItem::new(e.file_name().to_string_lossy().to_string()))
       .collect();
     let left_block = Block::default()
       .title("Local")
@@ -163,7 +219,8 @@ impl App {
     let right_items: Vec<ListItem> = self
       .remote_items
       .iter()
-      .map(|buf| ListItem::new(buf.to_string_lossy()))
+      .filter_map(|buf| buf.file_name())
+      .map(|s| ListItem::new(s.to_string_lossy()))
       .collect();
     let right_block = Block::default()
       .title("Remote")
