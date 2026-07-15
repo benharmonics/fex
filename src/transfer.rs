@@ -12,12 +12,28 @@ use anyhow::{Context, Result, bail};
 use ssh2::{FileStat, Sftp};
 
 use crate::{
-  event::TransferEvent,
   files,
   sftp::{ConnectSftpParams, connect_sftp},
 };
 
 const MAX_SFTP_POOL_SIZE: usize = 8;
+
+pub enum TransferEvent {
+  DownloadFinished {
+    job_id: u64,
+    remote_path: PathBuf,
+    result: Result<(), String>,
+  },
+  UploadFinished {
+    job_id: u64,
+    local_path: PathBuf,
+    result: Result<(), String>,
+  },
+  WorkerInitFailed {
+    worker_id: usize,
+    error: String,
+  },
+}
 
 enum TransferKind {
   Download {

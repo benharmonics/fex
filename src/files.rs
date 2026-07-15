@@ -40,7 +40,7 @@ pub fn remote_files(dir: &PathBuf, sftp: &Sftp) -> Result<Vec<(PathBuf, FileStat
 /// Upload a given file or directory from the local host to the remote host.
 pub fn upload(path_buf: &PathBuf, target_dir: &Path, sftp: &Sftp) -> Result<()> {
   if path_buf.is_file() {
-    upload_file_to_remote_host(&path_buf, target_dir, sftp)?;
+    upload_file_to_remote_host(path_buf, target_dir, sftp)?;
   } else if path_buf.is_dir() {
     let new_dir = &target_dir.join(path_buf.file_name().context("unnamed directory")?);
     sftp
@@ -80,7 +80,7 @@ fn upload_file_to_remote_host(path_buf: &PathBuf, target_dir: &Path, sftp: &Sftp
 
   let filename = path_buf.file_name().context("no file name")?; // TODO
   let mut remote_file = sftp
-    .create(&target_dir.join(&filename))
+    .create(&target_dir.join(filename))
     .with_context(|| format!("failed to create remote file {:?}", path_buf))?;
 
   io::copy(&mut local_file, &mut remote_file)

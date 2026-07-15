@@ -4,7 +4,7 @@ use std::{
   fs::DirEntry,
   path::Path,
   path::PathBuf,
-  sync::mpsc::{self, Receiver, RecvTimeoutError},
+  sync::mpsc::{self, Receiver},
   time::Duration,
 };
 
@@ -12,7 +12,7 @@ use anyhow::{Context, Result, bail};
 use clap::ArgMatches;
 use ratatui::{
   Frame,
-  crossterm::event::KeyCode,
+  crossterm::event::{self, Event, KeyCode, KeyEventKind},
   layout::{Constraint, Direction, Layout},
   style::{Color, Modifier, Style},
   widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
@@ -20,10 +20,9 @@ use ratatui::{
 use ssh2::{FileStat, Sftp};
 
 use crate::{
-  event::{self, AppEvent, TransferEvent},
   files,
   sftp::{AuthMethod, ConnectSftpParams, connect_sftp},
-  transfer::TransferManager,
+  transfer::{TransferEvent, TransferManager},
 };
 
 const DEFAULT_SFTP_POOL_SIZE: usize = 2;
@@ -76,7 +75,7 @@ pub struct App {
   pub should_quit: bool,
   show_help: bool,
 
-  events_rx: Receiver<AppEvent>,
+  // events_rx: Receiver<AppEvent>,
   transfer_events_rx: Receiver<TransferEvent>,
   focus: Focus,
 
@@ -157,7 +156,7 @@ impl App {
     Ok(Self {
       should_quit: false,
       show_help: false,
-      events_rx: event::spawn_app_event_threads(),
+      // events_rx: crate::event::spawn_app_event_threads(),
       transfer_events_rx,
       focus: Focus::Local,
 
@@ -175,11 +174,15 @@ impl App {
     })
   }
 
-  pub fn update(&mut self) -> Result<()> {
+  /// Update the application state.
+  pub fn update(&mut self) {
     self.drain_transfer_events(); // flush any received transfer events
 
-    match self.events_rx.recv_timeout(Duration::from_millis(100)) {
-      Ok(AppEvent::KeyPress(key)) => match key.code {
+    if event::poll(Duration::from_millis(100)).expect("crossterm event reader closed")
+      && let Event::Key(key) = event::read().expect("failed to read key events")
+      && key.kind == KeyEventKind::Press
+    {
+      match key.code {
         KeyCode::Esc | KeyCode::Char('q') => self.should_quit = true,
         KeyCode::Char('h') | KeyCode::Char('?') => self.show_help = !self.show_help,
         KeyCode::Char('j') | KeyCode::Down => self.next(),
@@ -189,18 +192,13 @@ impl App {
         KeyCode::Char('w') | KeyCode::Tab => self.switch_focus(),
         KeyCode::Char('y') | KeyCode::Enter => self.transfer_selection(),
         _ => {}
-      },
-      Err(RecvTimeoutError::Timeout) => {}
-      Err(RecvTimeoutError::Disconnected) => {
-        bail!("application event channel disconnected")
       }
     }
 
     self.drain_transfer_events(); // second flush for responsiveness
-
-    Ok(())
   }
 
+  /// Render the application to a frame - usually the whole terminal object.
   pub fn render(&mut self, f: &mut Frame) {
     let outer_chunks = Layout::default()
       .direction(Direction::Vertical)
@@ -279,6 +277,15 @@ impl App {
     f.render_widget(status, outer_chunks[2]);
   }
 
+  /// Toggle between focusing on local and remote host.
+  fn switch_focus(&mut self) {
+    self.focus = match self.focus {
+      Focus::Local => Focus::Remote,
+      Focus::Remote => Focus::Local,
+    }
+  }
+
+  /// Go to first item in focused list.
   fn first(&mut self) {
     match self.focus {
       Focus::Local => {
@@ -296,6 +303,7 @@ impl App {
     }
   }
 
+  /// Go to last item in focused list.
   fn last(&mut self) {
     match self.focus {
       Focus::Local => {
@@ -313,6 +321,7 @@ impl App {
     }
   }
 
+  /// Go to previous item in focused list.
   fn previous(&mut self) {
     match self.focus {
       Focus::Local => {
@@ -342,6 +351,7 @@ impl App {
     }
   }
 
+  // Go to next item in focused list.
   fn next(&mut self) {
     match self.focus {
       Focus::Local => {
@@ -363,6 +373,7 @@ impl App {
     }
   }
 
+  /// Go to next item in focused list.
   fn transfer_selection(&mut self) {
     match self.focus {
       // Upload
@@ -411,13 +422,6 @@ impl App {
         self.in_flight_transfers.insert(job_id, remote_path.clone());
         self.status_line = format!("Queued download #{}: {:?}", job_id, remote_path);
       }
-    }
-  }
-
-  fn switch_focus(&mut self) {
-    self.focus = match self.focus {
-      Focus::Local => Focus::Remote,
-      Focus::Remote => Focus::Local,
     }
   }
 

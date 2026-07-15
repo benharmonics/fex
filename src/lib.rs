@@ -1,6 +1,5 @@
 mod app;
 mod args;
-mod event;
 mod files;
 mod sftp;
 mod transfer;
@@ -49,7 +48,7 @@ pub fn run() -> Result<()> {
 
   while !app.should_quit {
     tg.terminal.draw(|f| app.render(f))?;
-    app.update()?;
+    app.update();
   }
 
   Ok(())
