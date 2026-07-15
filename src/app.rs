@@ -34,9 +34,9 @@ struct HostAddress {
 }
 
 const HELP_TEXT_LINES: [&str; 3] = [
-  "j or <down> - next        k or <up> - previous            w or <tab> - switch focus",
-  "y or <enter> - download   a - toggle show hidden files",
-  "q or <esc> - exit         h or ? - show help text",
+  "j or <down> - next              k or <up> - previous             y or <enter> - download",
+  "h or <left> - leave directory   l or <right> - enter directory   w or <tab> - switch focus",
+  "q or <esc> - exit               ? - show help text               a - toggle show hidden files",
 ];
 
 fn parse_host_address(input: &str) -> Result<HostAddress> {
@@ -74,10 +74,13 @@ enum Focus {
 pub struct App {
   pub should_quit: bool,
   show_help: bool,
-
-  // events_rx: Receiver<AppEvent>,
-  transfer_events_rx: Receiver<TransferEvent>,
   focus: Focus,
+  status_line: String,
+  browser_sftp: Sftp,
+
+  transfer_manager: TransferManager,
+  transfer_events_rx: Receiver<TransferEvent>,
+  in_flight_transfers: HashMap<u64, PathBuf>,
 
   local_state: ListState,
   remote_state: ListState,
@@ -87,11 +90,6 @@ pub struct App {
 
   local_items: Vec<DirEntry>,
   remote_items: Vec<(PathBuf, FileStat)>,
-
-  browser_sftp: Sftp,
-  transfer_manager: TransferManager,
-  in_flight_transfers: HashMap<u64, PathBuf>,
-  status_line: String,
 }
 
 impl App {
@@ -156,9 +154,13 @@ impl App {
     Ok(Self {
       should_quit: false,
       show_help: false,
-      // events_rx: crate::event::spawn_app_event_threads(),
-      transfer_events_rx,
       focus: Focus::Local,
+      status_line: "q to quit | ? to show help".to_string(),
+      browser_sftp,
+
+      transfer_manager,
+      in_flight_transfers: HashMap::new(),
+      transfer_events_rx,
 
       local_state,
       remote_state,
@@ -166,11 +168,6 @@ impl App {
       remote_path,
       local_items,
       remote_items,
-
-      browser_sftp,
-      transfer_manager,
-      in_flight_transfers: HashMap::new(),
-      status_line: "q to quit | ? to show help".to_string(),
     })
   }
 
@@ -184,9 +181,11 @@ impl App {
     {
       match key.code {
         KeyCode::Esc | KeyCode::Char('q') => self.should_quit = true,
-        KeyCode::Char('h') | KeyCode::Char('?') => self.show_help = !self.show_help,
+        KeyCode::Char('?') => self.show_help = !self.show_help,
         KeyCode::Char('j') | KeyCode::Down => self.next(),
         KeyCode::Char('k') | KeyCode::Up => self.previous(),
+        KeyCode::Char('h') | KeyCode::Left => self.enter_parent_dir(),
+        KeyCode::Char('l') | KeyCode::Right => self.enter_child_dir(),
         KeyCode::Char('g') | KeyCode::Char('t') => self.first(),
         KeyCode::Char('G') | KeyCode::Char('b') => self.last(),
         KeyCode::Char('w') | KeyCode::Tab => self.switch_focus(),
@@ -351,7 +350,7 @@ impl App {
     }
   }
 
-  // Go to next item in focused list.
+  /// Go to next item in focused list.
   fn next(&mut self) {
     match self.focus {
       Focus::Local => {
@@ -369,6 +368,56 @@ impl App {
         let i = self.remote_state.selected().unwrap_or(0);
         let next = (i + 1) % self.remote_items.len();
         self.remote_state.select(Some(next));
+      }
+    }
+  }
+
+  /// Enter the currently selected directory, if possible.
+  fn enter_child_dir(&mut self) {
+    match self.focus {
+      Focus::Local => {
+        let Some(i) = self.local_state.selected() else {
+          return;
+        };
+        let path_buf = &self.local_items[i].path();
+        if !path_buf.is_dir() {
+          self.status_line = "Not a directory.".to_string();
+          return;
+        };
+        self.local_path = path_buf.clone();
+        self.refresh_local_state();
+      }
+      Focus::Remote => {
+        let Some(i) = self.remote_state.selected() else {
+          return;
+        };
+        let (buf, stat) = &self.remote_items[i];
+        if !stat.is_dir() {
+          self.status_line = "Not a directory.".to_string();
+          return;
+        };
+        self.remote_path = buf.clone();
+        self.refresh_remote_state();
+      }
+    }
+  }
+
+  /// Exit the currently focused directory, entering its parent, if it has one.
+  fn enter_parent_dir(&mut self) {
+    match self.focus {
+      Focus::Local => {
+        let Some(parent) = self.local_path.parent() else {
+          return;
+        };
+        self.local_path = parent.to_path_buf();
+        self.refresh_local_state();
+      }
+      Focus::Remote => {
+        let Some(parent) = self.remote_path.parent() else {
+          return;
+        };
+        self.remote_path = parent.to_path_buf();
+        self.refresh_remote_state();
       }
     }
   }
@@ -436,17 +485,8 @@ impl App {
           self.in_flight_transfers.remove(&job_id);
           match result {
             Ok(()) => {
-              self.status_line =
-                format!("Downloaded #{}: {}", job_id, remote_path.to_string_lossy());
-              let Ok(items) = files::local_files(&self.local_path) else {
-                return;
-              };
-              self.local_items = items;
-              if self.local_items.is_empty() {
-                self.local_state.select(None);
-              } else if self.local_state.selected().is_none() {
-                self.local_state.select(Some(0));
-              }
+              self.status_line = format!("Downloaded #{}: {:?}", job_id, remote_path);
+              self.refresh_local_state();
             }
             Err(error) => {
               self.status_line =
@@ -464,15 +504,7 @@ impl App {
           match result {
             Ok(()) => {
               self.status_line = format!("Uploaded #{}: {:?}", job_id, local_path);
-              let Ok(items) = files::remote_files(&self.remote_path, &self.browser_sftp) else {
-                return;
-              };
-              self.remote_items = items;
-              if self.remote_items.is_empty() {
-                self.remote_state.select(None);
-              } else if self.remote_state.selected().is_none() {
-                self.remote_state.select(Some(0));
-              }
+              self.refresh_remote_state();
             }
             Err(error) => {
               self.status_line = format!("Upload failed #{}: {:?} ({})", job_id, local_path, error);
@@ -484,6 +516,32 @@ impl App {
           self.status_line = format!("Worker {} failed: {}", worker_id, error);
         }
       }
+    }
+  }
+
+  // Re-read the current local path and refresh local items and state.
+  fn refresh_local_state(&mut self) {
+    let Ok(items) = files::local_files(&self.local_path) else {
+      return;
+    };
+    self.local_items = items;
+    if self.local_items.is_empty() {
+      self.local_state.select(None);
+    } else if self.local_state.selected().is_none() {
+      self.local_state.select(Some(0));
+    }
+  }
+
+  // Re-read the current remote path and refresh remote items and state.
+  fn refresh_remote_state(&mut self) {
+    let Ok(items) = files::remote_files(&self.remote_path, &self.browser_sftp) else {
+      return;
+    };
+    self.remote_items = items;
+    if self.remote_items.is_empty() {
+      self.remote_state.select(None);
+    } else if self.remote_state.selected().is_none() {
+      self.remote_state.select(Some(0));
     }
   }
 }
