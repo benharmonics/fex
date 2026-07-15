@@ -85,6 +85,7 @@ pub struct App {
   browser_sftp: Sftp,
   transfer_manager: TransferManager,
   in_flight_downloads: HashMap<u64, PathBuf>,
+  in_flight_uploads: HashMap<u64, PathBuf>,
   status_line: String,
 }
 
@@ -163,6 +164,7 @@ impl App {
       browser_sftp,
       transfer_manager,
       in_flight_downloads: HashMap::new(),
+      in_flight_uploads: HashMap::new(),
       status_line: "Ready".to_string(),
     })
   }
@@ -341,6 +343,25 @@ impl App {
       // Upload
       Focus::Local => {
         self.status_line = "Upload not implemented".to_string();
+        let Some(selected_i) = self.local_state.selected() else {
+          self.status_line = "No selection.".to_string();
+          return;
+        };
+        let local_dir_entry = &self.local_items[selected_i];
+        let job_id = match self
+          .transfer_manager
+          .queue_upload(local_dir_entry.path(), self.remote_path.clone())
+        {
+          Ok(id) => id,
+          Err(e) => {
+            self.status_line = format!("Failure: {e:#}");
+            return;
+          }
+        };
+
+        let local_path = local_dir_entry.path();
+        self.status_line = format!("Queued upload #{}: {:?}", job_id, local_path);
+        self.in_flight_uploads.insert(job_id, local_path);
       }
 
       // Download
@@ -363,11 +384,7 @@ impl App {
         };
 
         self.in_flight_downloads.insert(job_id, remote_path.clone());
-        self.status_line = format!(
-          "Queued download #{}: {}",
-          job_id,
-          remote_path.to_string_lossy()
-        );
+        self.status_line = format!("Queued download #{}: {:?}", job_id, remote_path);
       }
     }
   }
@@ -412,6 +429,33 @@ impl App {
             }
           }
         }
+
+        TransferEvent::UploadFinished {
+          job_id,
+          local_path,
+          result,
+        } => {
+          self.in_flight_uploads.remove(&job_id);
+          match result {
+            Ok(()) => {
+              self.status_line = format!("Uploaded #{}: {:?}", job_id, local_path);
+              let Ok(items) = files::remote_files(&self.remote_path, &self.browser_sftp) else {
+                return;
+              };
+              self.remote_items = items;
+              if self.remote_items.is_empty() {
+                self.remote_state.select(None);
+              } else if self.remote_state.selected().is_none() {
+                self.remote_state.select(Some(0));
+              }
+            }
+            Err(error) => {
+              self.status_line =
+                format!("Upload failed #{}: {:?} ({})", job_id, local_path, error);
+            }
+          }
+        }
+
         TransferEvent::WorkerInitFailed { worker_id, error } => {
           self.status_line = format!("Worker {} failed: {}", worker_id, error);
         }

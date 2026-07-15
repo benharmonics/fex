@@ -37,18 +37,30 @@ pub fn remote_files(dir: &PathBuf, sftp: &Sftp) -> Result<Vec<(PathBuf, FileStat
   Ok(ret)
 }
 
-/// Download a given file or directory from the remote host to the local host.
-pub fn download(
-  path_buf: &PathBuf,
-  stat: &FileStat,
-  target_dir: &Path,
-  sftp: &Sftp,
-) -> Result<()> {
-  if stat.is_file() {
-    download_file_from_remote_host(path_buf, target_dir, sftp)?;
+/// Upload a given file or directory from the local host to the remote host.
+pub fn upload(path_buf: &PathBuf, target_dir: &Path, sftp: &Sftp) -> Result<()> {
+  if path_buf.is_file() {
+    upload_file_to_remote_host(&path_buf, target_dir, sftp)?;
+  } else if path_buf.is_dir() {
+    let new_dir = &target_dir.join(path_buf.file_name().context("unnamed directory")?);
+    sftp
+      .mkdir(new_dir, 0o664)
+      .with_context(|| format!("failed to make remote directory {:?}", new_dir))?;
+    for f in &local_files(path_buf)? {
+      upload(&f.path(), new_dir, sftp)?;
+    }
   }
 
-  if stat.is_dir() {
+  // TODO: symlinks?
+
+  Ok(())
+}
+
+/// Download a given file or directory from the remote host to the local host.
+pub fn download(path_buf: &PathBuf, stat: &FileStat, target_dir: &Path, sftp: &Sftp) -> Result<()> {
+  if stat.is_file() {
+    download_file_from_remote_host(path_buf, target_dir, sftp)?;
+  } else if stat.is_dir() {
     let new_dir = &target_dir.join(path_buf.file_name().context("unnamed directory")?);
     fs::create_dir_all(new_dir)
       .with_context(|| format!("failed to make directory {:?}", new_dir))?;
@@ -62,25 +74,36 @@ pub fn download(
   Ok(())
 }
 
+fn upload_file_to_remote_host(path_buf: &PathBuf, target_dir: &Path, sftp: &Sftp) -> Result<()> {
+  let mut local_file =
+    File::open(path_buf).with_context(|| format!("failed to open file {:?}", path_buf))?;
+
+  let filename = path_buf.file_name().context("no file name")?; // TODO
+  let mut remote_file = sftp
+    .create(&target_dir.join(&filename))
+    .with_context(|| format!("failed to create remote file {:?}", path_buf))?;
+
+  io::copy(&mut local_file, &mut remote_file)
+    .with_context(|| format!("failed to upload file {:?} to {:?}", filename, target_dir))?;
+
+  Ok(())
+}
+
 fn download_file_from_remote_host(
   path_buf: &PathBuf,
   target_dir: &Path,
   sftp: &Sftp,
 ) -> Result<()> {
   let filename = path_buf.file_name().context("no file name")?; // TODO
-  let mut dest = File::create(target_dir.join(filename))
+  let mut local_file = File::create(target_dir.join(filename))
     .with_context(|| format!("failed to create local file {}", filename.to_string_lossy()))?;
 
-  let mut contents = sftp
+  let mut remote_file = sftp
     .open(path_buf)
     .with_context(|| format!("failed to read remote path {}", path_buf.to_string_lossy()))?;
-  io::copy(&mut contents, &mut dest).with_context(|| {
-    format!(
-      "failed to download file {} to {}",
-      filename.to_string_lossy(),
-      target_dir.to_string_lossy()
-    )
-  })?;
+
+  io::copy(&mut remote_file, &mut local_file)
+    .with_context(|| format!("failed to download file {:?} to {:?}", filename, target_dir))?;
 
   Ok(())
 }

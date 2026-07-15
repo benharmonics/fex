@@ -16,6 +16,11 @@ pub enum TransferEvent {
     remote_path: PathBuf,
     result: Result<(), String>,
   },
+  UploadFinished {
+    job_id: u64,
+    local_path: PathBuf,
+    result: Result<(), String>,
+  },
   WorkerInitFailed {
     worker_id: usize,
     error: String,

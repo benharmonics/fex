@@ -9,7 +9,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use ssh2::FileStat;
+use ssh2::{FileStat, Sftp};
 
 use crate::{
   event::TransferEvent,
@@ -19,15 +19,57 @@ use crate::{
 
 const MAX_SFTP_POOL_SIZE: usize = 8;
 
-struct TransferJob {
-  id: u64,
-  remote_path: PathBuf,
-  remote_stat: FileStat,
-  local_target_dir: PathBuf,
+enum TransferKind {
+  Download {
+    id: u64,
+    remote_path: PathBuf,
+    remote_stat: FileStat,
+    local_target_dir: PathBuf,
+  },
+  Upload {
+    id: u64,
+    local_path: PathBuf,
+    remote_target_dir: PathBuf,
+  },
+}
+
+impl TransferKind {
+  fn transfer(self, sftp: &Sftp) -> TransferEvent {
+    match self {
+      TransferKind::Upload {
+        id,
+        local_path,
+        remote_target_dir,
+      } => {
+        let result =
+          files::upload(&local_path, &remote_target_dir, sftp).map_err(|e| format!("{e:#}"));
+        TransferEvent::UploadFinished {
+          job_id: id,
+          local_path,
+          result,
+        }
+      }
+
+      TransferKind::Download {
+        id,
+        remote_path,
+        remote_stat,
+        local_target_dir,
+      } => {
+        let result = files::download(&remote_path, &remote_stat, &local_target_dir, sftp)
+          .map_err(|e| format!("{e:#}"));
+        TransferEvent::DownloadFinished {
+          job_id: id,
+          remote_path,
+          result,
+        }
+      }
+    }
+  }
 }
 
 pub struct TransferManager {
-  jobs_tx: Option<Sender<TransferJob>>,
+  jobs_tx: Option<Sender<TransferKind>>,
   worker_handles: Vec<JoinHandle<()>>,
   next_job_id: AtomicU64,
 }
@@ -46,8 +88,8 @@ impl TransferManager {
       );
     }
 
-    let worker_count = pool_size.saturating_sub(1);
-    let (jobs_tx, jobs_rx) = mpsc::channel::<TransferJob>();
+    let worker_count = pool_size.saturating_sub(1); // One worker must always be available for UI
+    let (jobs_tx, jobs_rx) = mpsc::channel::<TransferKind>();
     let shared_rx = Arc::new(Mutex::new(jobs_rx));
 
     let mut worker_handles = Vec::with_capacity(worker_count);
@@ -76,20 +118,8 @@ impl TransferManager {
               let Ok(job) = rx.lock().expect("transfer queue lock poisoned").recv() else {
                 break; // sender closed
               };
-
-              let result = files::download(
-                &job.remote_path,
-                &job.remote_stat,
-                &job.local_target_dir,
-                &sftp,
-              )
-              .map_err(|e| format!("{e:#}"));
-
-              let evt = TransferEvent::DownloadFinished {
-                job_id: job.id,
-                remote_path: job.remote_path,
-                result,
-              };
+              let evt = job.transfer(&sftp);
+              // send event to event thread
               if tx.send(evt).is_err() {
                 break; // receiver closed
               }
@@ -106,6 +136,25 @@ impl TransferManager {
     })
   }
 
+  pub fn queue_upload(&self, local_path: PathBuf, remote_target_dir: PathBuf) -> Result<u64> {
+    let job_id = self.next_job_id.fetch_add(1, Ordering::Relaxed);
+    let job = TransferKind::Upload {
+      id: job_id,
+      local_path,
+      remote_target_dir,
+    };
+
+    let tx = self
+      .jobs_tx
+      .as_ref()
+      .context("transfer manager is shut down and cannot queue jobs")?;
+
+    tx.send(job)
+      .context("failed to queue transfer job because workers are unavailable")?;
+
+    Ok(job_id)
+  }
+
   pub fn queue_download(
     &self,
     remote_path: PathBuf,
@@ -113,7 +162,7 @@ impl TransferManager {
     local_target_dir: PathBuf,
   ) -> Result<u64> {
     let job_id = self.next_job_id.fetch_add(1, Ordering::Relaxed);
-    let job = TransferJob {
+    let job = TransferKind::Download {
       id: job_id,
       remote_path,
       remote_stat,
