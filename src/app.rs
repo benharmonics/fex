@@ -25,8 +25,6 @@ use crate::{
   transfer::{TransferEvent, TransferManager},
 };
 
-const DEFAULT_SFTP_POOL_SIZE: usize = 2;
-
 struct HostAddress {
   username: Option<String>,
   host: String,
@@ -95,6 +93,7 @@ pub struct App {
 impl App {
   pub fn new(matches: ArgMatches) -> Result<Self> {
     // TODO: move all interactions with ArgMatches somewhere else
+    let sftp_pool_size = matches.get_one::<usize>("workers").expect("required argument");
     let host_addr = parse_host_address(
       matches
         .get_one::<String>("host")
@@ -126,7 +125,7 @@ impl App {
 
     let (transfer_events_tx, transfer_events_rx) = mpsc::channel::<TransferEvent>();
     let transfer_manager = TransferManager::new(
-      DEFAULT_SFTP_POOL_SIZE,
+      *sftp_pool_size,
       &connect_sftp_params,
       transfer_events_tx,
     )

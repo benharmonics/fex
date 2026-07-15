@@ -19,6 +19,11 @@ pub fn get_matches() -> ArgMatches {
       .value_parser(value_parser!(String))
     )
     .arg(
+      arg!(-w --workers <NUM_WORKERS> "The SFTP worker pool size for concurrent transfers")
+      .default_value("2")
+      .value_parser(value_parser!(usize))
+    )
+    .arg(
       arg!(<HOST> "The remote host in format [username@]host[:port]").id("host").value_parser(value_parser!(String))
     )
     .get_matches()
