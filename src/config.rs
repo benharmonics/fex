@@ -41,10 +41,10 @@ impl SshConnectionConfig {
 }
 
 pub struct AppConfig {
-  cfg: SshConnectionConfig,
   pub sftp_pool_size: usize,
-  pub passphrase: Option<String>,
-  pub identity: Option<PathBuf>,
+  cfg: SshConnectionConfig,
+  identity: Option<PathBuf>,
+  passphrase: Option<String>,
 }
 
 impl AppConfig {

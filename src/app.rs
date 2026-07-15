@@ -367,7 +367,7 @@ impl App {
     }
   }
 
-  /// Go to next item in focused list.
+  /// Transfer currently selected item to the other host.
   fn transfer_selection(&mut self) {
     match self.focus {
       // Upload
