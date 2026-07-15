@@ -34,6 +34,12 @@ struct HostAddress {
   port: Option<u16>,
 }
 
+const HELP_TEXT_LINES: [&str; 3] = [
+  "j or <down> - next        k or <up> - previous            w or <tab> - switch focus",
+  "y or <enter> - download   a - toggle show hidden files",
+  "q or <esc> - exit         h or ? - show help text",
+];
+
 fn parse_host_address(input: &str) -> Result<HostAddress> {
   let (username, host_part) = match input.split_once('@') {
     Some((user, rest)) if !user.is_empty() => (Some(user.to_string()), rest),
@@ -68,6 +74,7 @@ enum Focus {
 
 pub struct App {
   pub should_quit: bool,
+  show_help: bool,
 
   events_rx: Receiver<AppEvent>,
   transfer_events_rx: Receiver<TransferEvent>,
@@ -84,8 +91,7 @@ pub struct App {
 
   browser_sftp: Sftp,
   transfer_manager: TransferManager,
-  in_flight_downloads: HashMap<u64, PathBuf>,
-  in_flight_uploads: HashMap<u64, PathBuf>,
+  in_flight_transfers: HashMap<u64, PathBuf>,
   status_line: String,
 }
 
@@ -150,6 +156,7 @@ impl App {
 
     Ok(Self {
       should_quit: false,
+      show_help: false,
       events_rx: event::spawn_app_event_threads(),
       transfer_events_rx,
       focus: Focus::Local,
@@ -163,9 +170,8 @@ impl App {
 
       browser_sftp,
       transfer_manager,
-      in_flight_downloads: HashMap::new(),
-      in_flight_uploads: HashMap::new(),
-      status_line: "Ready".to_string(),
+      in_flight_transfers: HashMap::new(),
+      status_line: "q to quit | ? to show help".to_string(),
     })
   }
 
@@ -174,13 +180,14 @@ impl App {
 
     match self.events_rx.recv_timeout(Duration::from_millis(100)) {
       Ok(AppEvent::KeyPress(key)) => match key.code {
-        KeyCode::Char('q') => self.should_quit = true,
+        KeyCode::Esc | KeyCode::Char('q') => self.should_quit = true,
+        KeyCode::Char('h') | KeyCode::Char('?') => self.show_help = !self.show_help,
         KeyCode::Char('j') | KeyCode::Down => self.next(),
         KeyCode::Char('k') | KeyCode::Up => self.previous(),
-        KeyCode::Char('g') => self.first(),
-        KeyCode::Char('G') => self.last(),
-        KeyCode::Tab => self.switch_focus(),
-        KeyCode::Enter => self.transfer_selection(),
+        KeyCode::Char('g') | KeyCode::Char('t') => self.first(),
+        KeyCode::Char('G') | KeyCode::Char('b') => self.last(),
+        KeyCode::Char('w') | KeyCode::Tab => self.switch_focus(),
+        KeyCode::Char('y') | KeyCode::Enter => self.transfer_selection(),
         _ => {}
       },
       Err(RecvTimeoutError::Timeout) => {}
@@ -197,10 +204,14 @@ impl App {
   pub fn render(&mut self, f: &mut Frame) {
     let outer_chunks = Layout::default()
       .direction(Direction::Vertical)
-      .constraints([Constraint::Min(1), Constraint::Length(1)])
+      .constraints([
+        Constraint::Fill(1),
+        Constraint::Length(if self.show_help { 5 } else { 1 }),
+        Constraint::Length(1),
+      ])
       .split(f.area());
 
-    let chunks = Layout::default()
+    let inner_chunks = Layout::default()
       .direction(Direction::Horizontal)
       .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
       .split(outer_chunks[0]);
@@ -222,10 +233,13 @@ impl App {
       .highlight_style(
         Style::default()
           .add_modifier(Modifier::REVERSED)
-          .fg(Color::Cyan),
+          .fg(match self.focus {
+            Focus::Local => Color::LightMagenta,
+            Focus::Remote => Color::default(),
+          }),
       )
       .highlight_symbol("> ");
-    f.render_stateful_widget(left_list, chunks[0], &mut self.local_state);
+    f.render_stateful_widget(left_list, inner_chunks[0], &mut self.local_state);
 
     let right_items: Vec<ListItem> = self
       .remote_items
@@ -245,13 +259,24 @@ impl App {
       .highlight_style(
         Style::default()
           .add_modifier(Modifier::REVERSED)
-          .fg(Color::Cyan),
+          .fg(match self.focus {
+            Focus::Local => Color::default(),
+            Focus::Remote => Color::LightMagenta,
+          }),
       )
       .highlight_symbol("> ");
-    f.render_stateful_widget(right_list, chunks[1], &mut self.remote_state);
+    f.render_stateful_widget(right_list, inner_chunks[1], &mut self.remote_state);
 
+    if self.show_help {
+      let help_block = Block::default()
+        .title("Help")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+      let help = Paragraph::new(HELP_TEXT_LINES.join("\n")).block(help_block);
+      f.render_widget(help, outer_chunks[1]);
+    }
     let status = Paragraph::new(self.status_line.clone());
-    f.render_widget(status, outer_chunks[1]);
+    f.render_widget(status, outer_chunks[2]);
   }
 
   fn first(&mut self) {
@@ -361,7 +386,7 @@ impl App {
 
         let local_path = local_dir_entry.path();
         self.status_line = format!("Queued upload #{}: {:?}", job_id, local_path);
-        self.in_flight_uploads.insert(job_id, local_path);
+        self.in_flight_transfers.insert(job_id, local_path);
       }
 
       // Download
@@ -383,7 +408,7 @@ impl App {
           }
         };
 
-        self.in_flight_downloads.insert(job_id, remote_path.clone());
+        self.in_flight_transfers.insert(job_id, remote_path.clone());
         self.status_line = format!("Queued download #{}: {:?}", job_id, remote_path);
       }
     }
@@ -404,7 +429,7 @@ impl App {
           remote_path,
           result,
         } => {
-          self.in_flight_downloads.remove(&job_id);
+          self.in_flight_transfers.remove(&job_id);
           match result {
             Ok(()) => {
               self.status_line =
@@ -420,12 +445,8 @@ impl App {
               }
             }
             Err(error) => {
-              self.status_line = format!(
-                "Download failed #{}: {} ({})",
-                job_id,
-                remote_path.to_string_lossy(),
-                error
-              );
+              self.status_line =
+                format!("Download failed #{}: {:?} ({})", job_id, remote_path, error);
             }
           }
         }
@@ -435,7 +456,7 @@ impl App {
           local_path,
           result,
         } => {
-          self.in_flight_uploads.remove(&job_id);
+          self.in_flight_transfers.remove(&job_id);
           match result {
             Ok(()) => {
               self.status_line = format!("Uploaded #{}: {:?}", job_id, local_path);
@@ -450,8 +471,7 @@ impl App {
               }
             }
             Err(error) => {
-              self.status_line =
-                format!("Upload failed #{}: {:?} ({})", job_id, local_path, error);
+              self.status_line = format!("Upload failed #{}: {:?} ({})", job_id, local_path, error);
             }
           }
         }
