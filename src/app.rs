@@ -8,8 +8,7 @@ use std::{
   time::Duration,
 };
 
-use anyhow::{Context, Result, bail};
-use clap::ArgMatches;
+use anyhow::{Context, Result};
 use ratatui::{
   Frame,
   crossterm::event::{self, Event, KeyCode, KeyEventKind},
@@ -20,49 +19,17 @@ use ratatui::{
 use ssh2::{FileStat, Sftp};
 
 use crate::{
+  config::AppConfig,
   files,
-  sftp::{AuthMethod, ConnectSftpParams, connect_sftp},
+  sftp::{ConnectSftpParams, connect_sftp},
   transfer::{TransferEvent, TransferManager},
 };
-
-struct HostAddress {
-  username: Option<String>,
-  host: String,
-  port: Option<u16>,
-}
 
 const HELP_TEXT_LINES: [&str; 3] = [
   "j or <down> - next              k or <up> - previous             y or <enter> - download",
   "h or <left> - leave directory   l or <right> - enter directory   w or <tab> - switch focus",
   "q or <esc> - exit               ? - show help text               a - toggle show hidden files",
 ];
-
-fn parse_host_address(input: &str) -> Result<HostAddress> {
-  let (username, host_part) = match input.split_once('@') {
-    Some((user, rest)) if !user.is_empty() => (Some(user.to_string()), rest),
-    _ => (None, input),
-  };
-
-  let (host, port) = match host_part.rsplit_once(':') {
-    Some((h, p)) if !p.is_empty() => {
-      let port_num = p
-        .parse::<u16>()
-        .with_context(|| format!("failed to parse port {p} as u16"))?;
-      (h.to_string(), Some(port_num))
-    }
-    _ => (host_part.to_string(), None),
-  };
-
-  if host.is_empty() {
-    bail!("invalid format: empty host");
-  }
-
-  Ok(HostAddress {
-    username,
-    host,
-    port,
-  })
-}
 
 enum Focus {
   Local,
@@ -91,33 +58,12 @@ pub struct App {
 }
 
 impl App {
-  pub fn new(matches: ArgMatches) -> Result<Self> {
-    // TODO: move all interactions with ArgMatches somewhere else
-    let sftp_pool_size = matches.get_one::<usize>("workers").expect("required argument");
-    let host_addr = parse_host_address(
-      matches
-        .get_one::<String>("host")
-        .expect("host is required argument"),
-    )
-    .context("failed to parse host address")?;
-    let username = host_addr.username.unwrap_or_else(|| {
-      whoami::username().expect("failed to get username as fallback when none provided")
-    });
-    let passphrase = matches.get_one::<String>("passphrase").cloned();
-
-    let auth = match matches.get_one::<PathBuf>("identity") {
-      Some(key_path) => AuthMethod::PrivateKey {
-        key_path: key_path.to_path_buf(),
-        passphrase,
-      },
-      None => AuthMethod::PasswordInput,
-    };
-
+  pub fn new(config: AppConfig) -> Result<Self> {
     let connect_sftp_params = ConnectSftpParams {
-      username: &username,
-      host: &host_addr.host,
-      port: host_addr.port.unwrap_or(22),
-      auth,
+      username: &config.username(),
+      host: &config.host(),
+      port: config.port(),
+      auth: config.auth(),
     };
     // Since SFTP is fundamentally single-threaded, we'll actually initailize a browser connection
     // for reading directories etc., and one or more worker connections for file transfers.
@@ -125,7 +71,7 @@ impl App {
 
     let (transfer_events_tx, transfer_events_rx) = mpsc::channel::<TransferEvent>();
     let transfer_manager = TransferManager::new(
-      *sftp_pool_size,
+      config.sftp_pool_size,
       &connect_sftp_params,
       transfer_events_tx,
     )
@@ -473,6 +419,7 @@ impl App {
     }
   }
 
+  /// Handle any transfer events received since last drain.
   fn drain_transfer_events(&mut self) {
     while let Ok(event) = self.transfer_events_rx.try_recv() {
       match event {
@@ -518,7 +465,7 @@ impl App {
     }
   }
 
-  // Re-read the current local path and refresh local items and state.
+  /// Re-read the current local path and refresh local items and state.
   fn refresh_local_state(&mut self) {
     let Ok(items) = files::local_files(&self.local_path) else {
       return;
@@ -531,7 +478,7 @@ impl App {
     }
   }
 
-  // Re-read the current remote path and refresh remote items and state.
+  /// Re-read the current remote path and refresh remote items and state.
   fn refresh_remote_state(&mut self) {
     let Ok(items) = files::remote_files(&self.remote_path, &self.browser_sftp) else {
       return;

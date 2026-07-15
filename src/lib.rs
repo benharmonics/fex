@@ -1,5 +1,6 @@
 mod app;
 mod args;
+mod config;
 mod files;
 mod sftp;
 mod transfer;
@@ -42,7 +43,8 @@ impl Drop for TerminalGuard {
 }
 
 pub fn run() -> Result<()> {
-  let mut app = app::App::new(args::get_matches()).context("failed to start app")?;
+  let cfg = config::AppConfig::parse_args(&args::get_matches())?;
+  let mut app = app::App::new(cfg).context("failed to start app")?;
 
   let mut tg = TerminalGuard::new()?;
 
