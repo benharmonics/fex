@@ -2,8 +2,7 @@ use std::{
   collections::HashMap,
   env,
   fs::DirEntry,
-  path::Path,
-  path::PathBuf,
+  path::{Path, PathBuf},
   sync::mpsc::{self, Receiver},
   time::Duration,
 };
@@ -39,6 +38,7 @@ enum Focus {
 pub struct App {
   pub should_quit: bool,
   show_help: bool,
+  show_hidden_files: bool,
   focus: Focus,
   status_line: String,
   browser_sftp: Sftp,
@@ -82,8 +82,29 @@ impl App {
       .realpath(Path::new("."))
       .context("failed to get remote directory")?;
 
-    let local_items = files::local_files(&local_path)?;
-    let remote_items = files::remote_files(&remote_path, &browser_sftp)?;
+    let local_items: Vec<DirEntry> = files::local_files(&local_path)?
+      .into_iter()
+      .filter(|de| {
+        !de
+          .path()
+          .file_name()
+          .expect("filename does not end in ..")
+          .to_str()
+          .expect("filename is valid unicode")
+          .starts_with(".")
+      })
+      .collect();
+    let remote_items: Vec<(PathBuf, FileStat)> = files::remote_files(&remote_path, &browser_sftp)?
+      .into_iter()
+      .filter(|(buf, _)| {
+        !buf
+          .file_name()
+          .expect("filename does not end in ..")
+          .to_str()
+          .expect("filename is valid unicode")
+          .starts_with(".")
+      })
+      .collect();
 
     let local_state = ListState::default().with_selected(if local_items.is_empty() {
       None
@@ -99,6 +120,7 @@ impl App {
     Ok(Self {
       should_quit: false,
       show_help: false,
+      show_hidden_files: false,
       focus: Focus::Local,
       status_line: "q to quit | ? to show help".to_string(),
       browser_sftp,
@@ -127,6 +149,7 @@ impl App {
       match key.code {
         KeyCode::Esc | KeyCode::Char('q') => self.should_quit = true,
         KeyCode::Char('?') => self.show_help = !self.show_help,
+        KeyCode::Char('a') => self.toggle_show_hidden_files(),
         KeyCode::Char('j') | KeyCode::Down => self.next(),
         KeyCode::Char('k') | KeyCode::Up => self.previous(),
         KeyCode::Char('h') | KeyCode::Left => self.enter_parent_dir(),
@@ -227,6 +250,12 @@ impl App {
       Focus::Local => Focus::Remote,
       Focus::Remote => Focus::Local,
     }
+  }
+
+  fn toggle_show_hidden_files(&mut self) {
+    self.show_hidden_files = !self.show_hidden_files;
+    self.refresh_local_state();
+    self.refresh_remote_state();
   }
 
   /// Go to first item in focused list.
@@ -465,12 +494,28 @@ impl App {
     }
   }
 
-  /// Re-read the current local path and refresh local items and state.
-  fn refresh_local_state(&mut self) {
+  fn set_local_items(&mut self) {
     let Ok(items) = files::local_files(&self.local_path) else {
       return;
     };
-    self.local_items = items;
+    self.local_items = items
+      .into_iter()
+      .filter(|de| {
+        self.show_hidden_files
+          || !de
+            .path()
+            .file_name()
+            .expect("filename does not end in ..")
+            .to_str()
+            .expect("filename is valid unicode")
+            .starts_with(".")
+      })
+      .collect();
+  }
+
+  /// Re-read the current local path and refresh local items and state.
+  fn refresh_local_state(&mut self) {
+    self.set_local_items();
     if self.local_items.is_empty() {
       self.local_state.select(None);
     } else if self.local_state.selected().is_none() {
@@ -478,12 +523,27 @@ impl App {
     }
   }
 
-  /// Re-read the current remote path and refresh remote items and state.
-  fn refresh_remote_state(&mut self) {
+  fn set_remote_items(&mut self) {
     let Ok(items) = files::remote_files(&self.remote_path, &self.browser_sftp) else {
       return;
     };
-    self.remote_items = items;
+    self.remote_items = items
+      .into_iter()
+      .filter(|(buf, _)| {
+        self.show_hidden_files
+          || !buf
+            .file_name()
+            .expect("filename does not end in ..")
+            .to_str()
+            .expect("filename is valid unicode")
+            .starts_with(".")
+      })
+      .collect();
+  }
+
+  /// Re-read the current remote path and refresh remote items and state.
+  fn refresh_remote_state(&mut self) {
+    self.set_remote_items();
     if self.remote_items.is_empty() {
       self.remote_state.select(None);
     } else if self.remote_state.selected().is_none() {
