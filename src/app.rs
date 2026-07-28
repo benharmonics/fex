@@ -25,9 +25,9 @@ use crate::{
 };
 
 const HELP_TEXT_LINES: [&str; 3] = [
-  "j or <down> - next              k or <up> - previous             y or <enter> - download",
-  "h or <left> - leave directory   l or <right> - enter directory   w or <tab> - switch focus",
-  "q or <esc> - exit               ? - show help text               a - toggle show hidden files",
+  "j or <down> - next     h or <left> - leave directory    y or <enter> - download",
+  "k or <up> - previous   l or <right> - enter directory   w or <tab> - switch focus",
+  "q or <esc> - exit      ? - show help text               a - toggle show hidden files",
 ];
 
 enum Focus {
@@ -494,6 +494,7 @@ impl App {
     }
   }
 
+  /// Read current dir on local host and set application's local items.
   fn set_local_items(&mut self) {
     let Ok(items) = files::local_files(&self.local_path) else {
       return;
@@ -523,6 +524,7 @@ impl App {
     }
   }
 
+  /// Read current dir at remote host and set application's remote items.
   fn set_remote_items(&mut self) {
     let Ok(items) = files::remote_files(&self.remote_path, &self.browser_sftp) else {
       return;

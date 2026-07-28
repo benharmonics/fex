@@ -11,10 +11,9 @@ pub enum AuthMethod {
     key_path: PathBuf,
     passphrase: Option<String>,
   },
-  PasswordCli {
+  PasswordInput {
     password: String,
   },
-  PasswordInput,
 }
 
 pub struct ConnectSftpParams<'a> {
@@ -88,16 +87,10 @@ fn authenticate(sess: &Session, username: &str, auth: AuthMethod) -> Result<()> 
         .userauth_pubkey_file(username, None, Path::new(&key_path), passphrase.as_deref())
         .context("failed to set pubkey auth")?;
     }
-    AuthMethod::PasswordCli { password } => {
+    AuthMethod::PasswordInput { password } => {
       sess
         .userauth_password(username, &password)
         .context("failed password authentication")?;
-    }
-    AuthMethod::PasswordInput => {
-      unimplemented!();
-      // sess
-      //   .userauth_password(&username, &password)
-      //   .context("failed password authentication")?;
     }
   }
 

@@ -89,7 +89,10 @@ impl AppConfig {
         key_path: key_path.to_path_buf(),
         passphrase: self.passphrase.clone(),
       },
-      None => AuthMethod::PasswordInput,
+      None => AuthMethod::PasswordInput {
+        password: rpassword::prompt_password(format!("Enter password for {}: ", self.username()))
+          .expect("failed to prompt for password"),
+      },
     }
   }
 }
