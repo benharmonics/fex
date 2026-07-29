@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{num::NonZero, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
 use clap::ArgMatches;
@@ -55,9 +55,16 @@ impl AppConfig {
         .expect("host is required argument"),
     )
     .context("failed to parse host address")?;
+
     let sftp_pool_size = matches
       .get_one::<usize>("workers")
       .expect("required argument");
+    let max_threads = std::thread::available_parallelism()
+      .unwrap_or(NonZero::new(8).expect("plausible default max threads"));
+    if !(2..=max_threads.into()).contains(sftp_pool_size) {
+      bail!("worker pool size must be in [2, {max_threads}]");
+    }
+
     let passphrase = matches.get_one::<String>("passphrase").cloned();
     let identity = matches.get_one::<PathBuf>("identity").cloned();
 
