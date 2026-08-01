@@ -10,14 +10,14 @@ Use VIM keys or arrow keys for navigation!
 
 ## Controls
 
-- `l` or `➡` (right arrow key): enter highlighted directory (move further down the directory tree)
-- `h` or `⬅` (left arrow key): exit current directory (move further up the directory tree)
-- `j` or `⬇` (down arrow key): move down
-- `k` or `⬆` (up arrow key): move up
+- `l` or `→` (right arrow key): enter highlighted directory (move further down the directory tree)
+- `h` or `←` (left arrow key): exit current directory (move further up the directory tree)
+- `j` or `↓` (down arrow key): move down
+- `k` or `↑` (up arrow key): move up
 - `y` or `↩` (enter): download/upload highlighted item
 - `w` or `↹` (tab): Switch windows
-- `G` or `b` or `Ctrl`+`⬇`: navigate to bottom-most entry
-- `g` or `t` or `Ctrl`+`⬆`: navigate to top-most entry
+- `G` or `b`: navigate to bottom-most entry
+- `g` or `t`: navigate to top-most entry
 - `a`: toggle hidden files
 - `q` or `Esc`: quit
 - `?`: toggle help menu

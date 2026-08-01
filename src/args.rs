@@ -13,14 +13,13 @@ pub fn get_matches() -> ArgMatches {
     )
     .arg(
       arg!(
-        -p --passphrase <PASSPHRASE> "Optional passphrase used with an identity file."
+        -p --passphrase "If set, the app will prompt for the additional passphrase for your SSH key."
       )
       .required(false)
-      .value_parser(value_parser!(String))
     )
     .arg(
       arg!(-w --workers <NUM_WORKERS> "The SFTP worker pool size for concurrent transfers")
-      .default_value("2")
+      .default_value("4")
       .value_parser(value_parser!(usize))
     )
     .arg(

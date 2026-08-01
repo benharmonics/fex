@@ -44,7 +44,7 @@ pub struct AppConfig {
   pub sftp_pool_size: usize,
   cfg: SshConnectionConfig,
   identity: Option<PathBuf>,
-  passphrase: Option<String>,
+  passphrase: bool,
 }
 
 impl AppConfig {
@@ -65,14 +65,11 @@ impl AppConfig {
       bail!("worker pool size must be in [2, {max_threads}]");
     }
 
-    let passphrase = matches.get_one::<String>("passphrase").cloned();
-    let identity = matches.get_one::<PathBuf>("identity").cloned();
-
     Ok(Self {
       cfg: host,
       sftp_pool_size: *sftp_pool_size,
-      passphrase,
-      identity,
+      passphrase: matches.get_flag("passphrase"),
+      identity: matches.get_one::<PathBuf>("identity").cloned(),
     })
   }
 
@@ -94,7 +91,17 @@ impl AppConfig {
     match self.identity.clone() {
       Some(key_path) => AuthMethod::PrivateKey {
         key_path: key_path.to_path_buf(),
-        passphrase: self.passphrase.clone(),
+        passphrase: if self.passphrase {
+          Some(
+            rpassword::prompt_password(format!(
+              "Enter passphrase for private key {:?}: ",
+              key_path
+            ))
+            .expect("failed to prompt for passphrase"),
+          )
+        } else {
+          None
+        },
       },
       None => AuthMethod::PasswordInput {
         password: rpassword::prompt_password(format!("Enter password for {}: ", self.username()))

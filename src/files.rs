@@ -9,14 +9,16 @@ use ssh2::{FileStat, Sftp};
 
 /// List all remote files on a given path.
 pub fn local_files(dir: &PathBuf) -> Result<Vec<DirEntry>> {
-  let contents = fs::read_dir(dir)
-    .with_context(|| format!("failed to read directory {}", dir.to_string_lossy()))?;
-  let mut files: Vec<DirEntry> = contents.filter_map(|r| r.ok()).collect();
+  let mut files: Vec<_> = fs::read_dir(dir)
+    .with_context(|| format!("failed to read directory {}", dir.to_string_lossy()))?
+    .filter_map(|r| r.ok())
+    .collect();
   files.sort_by(|a, b| {
     a.file_name()
       .to_string_lossy()
       .cmp(&b.file_name().to_string_lossy())
   });
+
   Ok(files)
 }
 
@@ -41,10 +43,10 @@ pub fn remote_files(dir: &PathBuf, sftp: &Sftp) -> Result<Vec<(PathBuf, FileStat
 pub fn upload(path_buf: &PathBuf, target_dir: &Path, sftp: &Sftp) -> Result<()> {
   if path_buf.is_file() {
     upload_file_to_remote_host(path_buf, target_dir, sftp)?;
-  } else if path_buf.is_dir() {
+  } else if path_buf.is_dir() && !path_buf.is_symlink() {
     let new_dir = &target_dir.join(path_buf.file_name().context("unnamed directory")?);
     sftp
-      .mkdir(new_dir, 0o664)
+      .mkdir(new_dir, 0o755)
       .with_context(|| format!("failed to make remote directory {:?}", new_dir))?;
     for f in &local_files(path_buf)? {
       upload(&f.path(), new_dir, sftp)?;

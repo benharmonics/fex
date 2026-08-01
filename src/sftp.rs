@@ -1,9 +1,12 @@
 use anyhow::{Context, Result, bail};
 use ssh2::{CheckResult, KnownHostFileKind, Session, Sftp};
 use std::{
-  net::TcpStream,
+  net::{TcpStream, ToSocketAddrs},
   path::{Path, PathBuf},
+  time::Duration,
 };
+
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone)]
 pub enum AuthMethod {
@@ -24,8 +27,15 @@ pub struct ConnectSftpParams<'a> {
 }
 
 pub fn connect_sftp(ps: &ConnectSftpParams) -> Result<Sftp> {
-  let addr = format!("{}:{}", ps.host, ps.port);
-  let tcpstream = TcpStream::connect(&addr).context("failed to construct TCP stream")?;
+  let Some(addr) = format!("{}:{}", ps.host, ps.port)
+    .to_socket_addrs()
+    .expect("valid address")
+    .next()
+  else {
+    bail!("failed to parse host {} and port {}", ps.host, ps.port);
+  };
+  let tcpstream =
+    TcpStream::connect_timeout(&addr, DEFAULT_TIMEOUT).context("failed to construct TCP stream")?;
 
   let mut sess = Session::new().context("failed to create session")?;
   sess.set_tcp_stream(tcpstream);
@@ -58,7 +68,7 @@ fn verify_host_key(sess: &Session, host: &str) -> Result<()> {
     }
     CheckResult::Mismatch => {
       bail!(
-        "mismatch with host: possible man-in-the-middle attack: {}",
+        "mismatch with host {} in known hosts file: possible man-in-the-middle attack",
         host
       );
     }
