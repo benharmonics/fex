@@ -82,7 +82,7 @@ impl App {
       .realpath(Path::new("."))
       .context("failed to get remote directory")?;
 
-    let local_items: Vec<DirEntry> = files::local_files(&local_path)?
+    let local_items: Vec<_> = files::local_files(&local_path)?
       .into_iter()
       .filter(|de| {
         !de
@@ -94,7 +94,7 @@ impl App {
           .starts_with(".")
       })
       .collect();
-    let remote_items: Vec<(PathBuf, FileStat)> = files::remote_files(&remote_path, &browser_sftp)?
+    let remote_items: Vec<_> = files::remote_files(&remote_path, &browser_sftp)?
       .into_iter()
       .filter(|(buf, _)| {
         !buf
@@ -181,7 +181,7 @@ impl App {
       .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
       .split(outer_chunks[0]);
 
-    let left_items: Vec<ListItem> = self
+    let left_items: Vec<_> = self
       .local_items
       .iter()
       .map(|e| ListItem::new(e.file_name().to_string_lossy().to_string()))
@@ -206,7 +206,7 @@ impl App {
       .highlight_symbol("> ");
     f.render_stateful_widget(left_list, inner_chunks[0], &mut self.local_state);
 
-    let right_items: Vec<ListItem> = self
+    let right_items: Vec<_> = self
       .remote_items
       .iter()
       .filter_map(|(buf, _)| buf.file_name())

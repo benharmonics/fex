@@ -10,7 +10,7 @@ use ssh2::{FileStat, Sftp};
 /// List all remote files on a given path.
 pub fn local_files(dir: &PathBuf) -> Result<Vec<DirEntry>> {
   let mut files: Vec<_> = fs::read_dir(dir)
-    .with_context(|| format!("failed to read directory {}", dir.to_string_lossy()))?
+    .with_context(|| format!("failed to read directory {:?}", dir))?
     .filter_map(|r| r.ok())
     .collect();
   files.sort_by(|a, b| {
@@ -28,7 +28,7 @@ pub fn local_files(dir: &PathBuf) -> Result<Vec<DirEntry>> {
 pub fn remote_files(dir: &PathBuf, sftp: &Sftp) -> Result<Vec<(PathBuf, FileStat)>> {
   let mut ret = sftp
     .readdir(dir)
-    .with_context(|| format!("failed to read remote directory {}", dir.to_string_lossy()))?;
+    .with_context(|| format!("failed to read remote directory {:?}", dir))?;
   ret.sort_by(|(a, _), (b, _)| {
     a.file_name()
       .unwrap_or_default()
@@ -98,11 +98,11 @@ fn download_file_from_remote_host(
 ) -> Result<()> {
   let filename = path_buf.file_name().context("no file name")?; // TODO
   let mut local_file = File::create(target_dir.join(filename))
-    .with_context(|| format!("failed to create local file {}", filename.to_string_lossy()))?;
+    .with_context(|| format!("failed to create local file {:?}", filename))?;
 
   let mut remote_file = sftp
     .open(path_buf)
-    .with_context(|| format!("failed to read remote path {}", path_buf.to_string_lossy()))?;
+    .with_context(|| format!("failed to read remote path {:?}", path_buf))?;
 
   io::copy(&mut remote_file, &mut local_file)
     .with_context(|| format!("failed to download file {:?} to {:?}", filename, target_dir))?;

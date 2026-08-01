@@ -8,15 +8,13 @@ use std::{
   thread::{self, JoinHandle},
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use ssh2::{FileStat, Sftp};
 
 use crate::{
   files,
   sftp::{ConnectSftpParams, connect_sftp},
 };
-
-const MAX_SFTP_POOL_SIZE: usize = 8;
 
 pub enum TransferEvent {
   DownloadFinished {
@@ -96,14 +94,6 @@ impl TransferManager {
     connect_sftp_params: &ConnectSftpParams,
     events_tx: Sender<TransferEvent>,
   ) -> Result<Self> {
-    if !(1..=MAX_SFTP_POOL_SIZE).contains(&pool_size) {
-      bail!(
-        "invalid SFTP pool size {}; expected value between 1 and {}",
-        pool_size,
-        MAX_SFTP_POOL_SIZE
-      );
-    }
-
     let worker_count = pool_size.saturating_sub(1); // One worker must always be available for UI
     let (jobs_tx, jobs_rx) = mpsc::channel::<TransferKind>();
     let shared_rx = Arc::new(Mutex::new(jobs_rx));
